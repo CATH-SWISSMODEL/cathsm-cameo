@@ -105,6 +105,16 @@ def iter_hits(crh, target):
         yield hit
 
 
+def iter_sm_models(base, target):
+    """ Return a generator that yields the SWISS-MODEL models for the target
+    in the order they were returned to CAMEO.
+    """
+    models_glob = os.path.join(base, target, "part-*.pdb")
+    model_filenames = sorted(glob(models_glob))
+    for model_filename in model_filenames:
+        yield ost.io.LoadPDB(model_filename)
+
+
 def get_query_range(crh, target, hit):
     """ Get the query range that was used in this hit.  Return a tuple (start,
     end). """
@@ -151,7 +161,7 @@ def renumber_model(model, new_start):
     editor.UpdateXCS()
 
 
-def get_targets(base, target):
+def get_target_structures(base, target):
     """ Get the structures (BioUnits) of this target. Returns a list of
     targets."""
     target_glob = os.path.join(base, target, "bu_target_*.pdb")
@@ -161,10 +171,20 @@ def get_targets(base, target):
     return targets
 
 
+def get_target_structure(base, target):
+    """ Get the target structure of this target."""
+    target_filename = os.path.join(base, target, "target.pdb")
+    return ost.io.LoadPDB(target_filename)
+
+
 def get_target_alignment(base, target):
     """ Get the length of the target sequence."""
     target_aln_path = os.path.join(base, target, "target.aln")
-    aln = ost.io.LoadSequenceList(target_aln_path, format='fasta')
+    seqlist = ost.io.LoadSequenceList(target_aln_path, format='fasta')
+    assert len(seqlist) == 2
+    aln = ost.seq.CreateAlignment()
+    for seq in seqlist:
+        aln.AddSequence(seq)
     return aln
 
 
@@ -172,11 +192,17 @@ def cut_targets(targets, query_range):
     """ Cut the targets to the query range. Return a list of targets restricted
     to the query range."""
     target_views = []
+    for target in targets:
+        target_views.append(cut_target(target))
+    return target_views
+
+
+def cut_target(target, query_range):
+    """ Cut the target to the query range. Return a view of the target with the
+    range selected."""
     sele_str = 'rnum>=%s and rnum<=%s' % query_range
     sele_str += ' and cname!="_" and cname!="-"'  # no ligand or water
-    for target in targets:
-        target_views.append(target.Select(sele_str))
-    return target_views
+    return target.Select(sele_str)
 
 
 def compare_structures(model, reference):
@@ -210,9 +236,9 @@ def compare_structures(model, reference):
                 # portion of the target sequence that doesn't include our
                 # domain of interest. We keep track of this hit with missing
                 # values (None)
-                ost.LogError("The reference structure appears to be empty. " +
-                             "This probably means it didn't cover this " +
-                             "domain. Returning missing values.")
+                ost.LogError("The reference structure appears to be empty. "
+                             + "This probably means it didn't cover this "
+                             + "domain. Returning missing values.")
                 return {'weighted_lddt': None,
                         'oligo_lddt': None,
                         'single_chain_lddt': None,
@@ -221,9 +247,23 @@ def compare_structures(model, reference):
             else:
                 raise RuntimeError("ost compare-structure returned %s" % proc.returncode)
         compare_data = json.load(open(output_file.name))
-        compare_results = compare_data['result'][
-            os.path.basename(model_file.name)][
-            os.path.basename(target_file.name)]
+        try:
+            compare_results = compare_data['result'][
+                os.path.basename(model_file.name)][
+                os.path.basename(target_file.name)]
+        except KeyError:
+            ost.LogError("ost compare-structures retured a success code but "
+                         + "the expected data is not available. This is "
+                         + "probably caused by an acceptable error such as "
+                         + "a failure in chain mapping. Returning missing "
+                         + "values. STDERR output included below: ")
+            ost.LogError(stderr)
+            return {'weighted_lddt': None,
+                    'oligo_lddt': None,
+                    'single_chain_lddt': None,
+                    'coverage': None,
+                    }
+
         # What is the coverage of the model?
         coverages = []
         for aln_str in compare_results['info']['mapping']['alignments']:
@@ -251,18 +291,21 @@ def assess_target(target, args, crh):
     """ Assess SM and CATH-SM models against a target. """
     results = []
     ost.LogScript(target)
-    targets = get_targets(args.targets_path, target)
-    sm_model = get_sm_model(args.sm_models_path, target)
+    target_structure = get_target_structure(args.targets_path, target)
     for rank, hit in enumerate(iter_hits(crh, target), start=1):
         ost.LogScript(hit)
         query_range = get_query_range(crh, target, hit)
         cathsm_model = get_cathsm_model(args.models_path, target, hit)
-        targets_for_hit = cut_targets(targets, query_range)
+        target_for_hit = cut_target(target_structure, query_range)
 
         # Compare
-        for target_structure in targets_for_hit:
-            lddt_cathsm = compare_structures(cathsm_model, target_structure)
-            lddt_sm = compare_structures(sm_model, target_structure)
+        lddt_cathsm = compare_structures(cathsm_model, target_for_hit)
+
+        for sm_rank, sm_model in enumerate(
+                iter_sm_models(args.sm_models_path, target),
+                start=1):
+            ost.LogScript("SM model %s" % sm_rank)
+            lddt_sm = compare_structures(sm_model, target_for_hit)
             results.append({
                 'target': target,
                 'target_length':
@@ -279,6 +322,7 @@ def assess_target(target, args, crh):
                 'cathsm_single_chain_lddt': lddt_cathsm['single_chain_lddt'],
                 'sm_coverage': lddt_sm['coverage'],
                 'cathsm_coverage': lddt_cathsm['coverage'],
+                'sm_rank': sm_rank,
             })
     return results
 
