@@ -1,4 +1,4 @@
-#!/usr/bin/env ost
+#!/usr/bin/env sm
 """ This script generates a CSV file with lDDT values. """
 from __future__ import print_function
 import argparse
@@ -263,22 +263,22 @@ def compare_structures(model, reference):
                                 stderr=subprocess.PIPE)
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
-            ost.LogError("ost compare-structures returned %s, error stream included below " % proc.returncode)
-            ost.LogError(stderr)
             if reference.atom_count == 0:
                 # Reference is empty, probably because it covered an other
                 # portion of the target sequence that doesn't include our
                 # domain of interest. We keep track of this hit with missing
                 # values (None)
-                ost.LogError("The reference structure appears to be empty. "
-                             + "This probably means it didn't cover this "
-                             + "domain. Returning missing values.")
+                ost.LogWarning("The reference structure appears to be empty. "
+                               + "This probably means it didn't cover this "
+                               + "domain. Returning missing values.")
                 return {'weighted_lddt': None,
                         'oligo_lddt': None,
                         'single_chain_lddt': None,
                         'coverage': None,
                         }
             else:
+                ost.LogError("ost compare-structures returned %s, error stream included below " % proc.returncode)
+                ost.LogError(stderr)
                 raise RuntimeError("ost compare-structure returned %s" % proc.returncode)
         compare_data = json.load(open(output_file.name))
         try:
