@@ -105,14 +105,47 @@ def iter_hits(crh, target):
         yield hit
 
 
+def get_pdb_info(filename):
+    """ Get the QMN4, template, sequence similarity and identity values from
+     the REMARK section a SWISS-MODEL PDB file. Return a dictionary."""
+    qmn4 = None
+    template = None
+    sim = None
+    sid = None
+    with open(filename) as fd:
+        fd.seek(4800)  # Skip header until around line "REMARK   3 MODEL INFORMATION"
+        for line in fd:
+            if line.startswith("REMARK   3  QMN4"):
+                offset = len("REMARK   3  QMN4")
+                qmn4 = float(line[offset:])
+            elif line.startswith("REMARK   3  SMTLE"):
+                offset = len("REMARK   3  SMTLE")
+                template = line[offset:].strip()
+            elif line.startswith("REMARK   3  SIM"):
+                offset = len("REMARK   3  SIM")
+                sim = float(line[offset:])
+            elif line.startswith("REMARK   3  SID"):
+                offset = len("REMARK   3  SID")
+                sid = float(line[offset:])
+            if sid is not None and sim is not None and qmn4 is not None and \
+                    template is not None:
+                return {"qmean4": qmn4,
+                        "template": template,
+                        "sim": sim,
+                        "sid": sid
+                        }
+    raise ValueError("QMN4 value not found")
+
+
 def iter_sm_models(base, target):
-    """ Return a generator that yields the SWISS-MODEL models for the target
-    in the order they were returned to CAMEO.
+    """ Return a generator that yields a tuple with the SWISS-MODEL models for
+    the target in the order they were returned to CAMEO and extra information
+    in a dictionary.
     """
-    models_glob = os.path.join(base, target, "part-*.pdb")
+    models_glob = os.path.join(base, target, "model-*.pdb")
     model_filenames = sorted(glob(models_glob))
     for model_filename in model_filenames:
-        yield ost.io.LoadPDB(model_filename)
+        yield ost.io.LoadPDB(model_filename), get_pdb_info(model_filename)
 
 
 def get_query_range(crh, target, hit):
@@ -127,7 +160,8 @@ def get_query_range(crh, target, hit):
 def get_cathsm_model(base, target, hit):
     """ Get the CATH-SM model as an ost Entity. The model is re-numbered
     according to the query range in order to be directly comparable to the
-    target, as required by CAMEO."""
+    target, as required by CAMEO. Return a tuple with the entity and
+    extra information in a dictionary."""
     model_path = os.path.join(base, target, "%s.%s.pdb" % (target, hit))
     json_path = os.path.join(base, target, "%s.%s.json" % (target, hit))
     metadata = json.load(open(json_path))
@@ -142,7 +176,7 @@ def get_cathsm_model(base, target, hit):
 
 def get_sm_model(base, target):
     """ Get the structure of the top-ranked SWISS-MODEL model. """
-    model_glob = os.path.join(base, target, "part-*.pdb")
+    model_glob = os.path.join(base, target, "model-*.pdb")
     models_path = sorted(glob(model_glob))
     top_model = models_path[0]
     return ost.io.LoadPDB(top_model)
@@ -295,13 +329,13 @@ def assess_target(target, args, crh):
     for rank, hit in enumerate(iter_hits(crh, target), start=1):
         ost.LogScript(hit)
         query_range = get_query_range(crh, target, hit)
-        cathsm_model = get_cathsm_model(args.models_path, target, hit)
+        cathsm_model, cathsm_info = get_cathsm_model(args.models_path, target, hit)
         target_for_hit = cut_target(target_structure, query_range)
 
         # Compare
         lddt_cathsm = compare_structures(cathsm_model, target_for_hit)
 
-        for sm_rank, sm_model in enumerate(
+        for sm_rank, (sm_model, sm_info) in enumerate(
                 iter_sm_models(args.sm_models_path, target),
                 start=1):
             ost.LogScript("SM model %s" % sm_rank)
@@ -323,6 +357,11 @@ def assess_target(target, args, crh):
                 'sm_coverage': lddt_sm['coverage'],
                 'cathsm_coverage': lddt_cathsm['coverage'],
                 'sm_rank': sm_rank,
+                'cathsm_template': cathsm_info['template'],
+                'sm_template': sm_info['template'],
+                'cathsm_qmean4': cathsm_info['qmean4'],
+                'sm_qmean4': sm_info['qmean4'],
+                'sm_qmeandisco': qmeandisco_sm,
             })
     return results
 
