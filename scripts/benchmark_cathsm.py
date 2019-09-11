@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from glob import glob
 import json
+import numpy
 import os
 import pandas
 import subprocess
@@ -168,10 +169,19 @@ def get_cathsm_model(base, target, hit):
     model = ost.io.LoadPDB(model_path)
     # Model is numbered based on query_sequence. We need to renumber it
     # so that it corresponds to the CAMEO sequence. In this case we need the
-    # first residue of the model to have the number of the start of query_range.
-    new_start = int(metadata['query_range'].split('-')[0])
-    renumber_model(model, new_start)
-    return model
+    # first residue of the model to have the number of the start of query_range
+    # plus how many gaps at the start minus an offset if model starts not
+    # at residue 1 (gap in template atoms)
+    qr_start = int(metadata['query_range'].split('-')[0])
+    tpl_seq = metadata['template_sequence']
+    trg_seq = metadata['target_sequence']
+    leading_gaps_tpl = len(tpl_seq) - len(tpl_seq.lstrip('-'))
+    leading_gaps_trg = len(trg_seq) - len(trg_seq.lstrip('-'))
+    first_residue_number = model.residues[0].number.num
+    first_residue_offset = first_residue_number - 1
+    assert (leading_gaps_tpl == 0) or (leading_gaps_trg == 0)
+    renumber_model(model, qr_start + first_residue_offset)
+    return model, get_pdb_info(model_path)
 
 
 def get_sm_model(base, target):
@@ -321,6 +331,13 @@ def compare_structures(model, reference):
                 }
 
 
+def get_qmeandisco_range(model, query_range):
+    """Return average QMEANDisCo of model on the query_range"""
+    cut_model = cut_target(model, query_range)
+    b_factors = [r.atoms[0].b_factor for r in cut_model.residues]
+    return numpy.mean(b_factors)
+
+
 def assess_target(target, args, crh):
     """ Assess SM and CATH-SM models against a target. """
     results = []
@@ -340,6 +357,7 @@ def assess_target(target, args, crh):
                 start=1):
             ost.LogScript("SM model %s" % sm_rank)
             lddt_sm = compare_structures(sm_model, target_for_hit)
+            qmeandisco_sm = get_qmeandisco_range(sm_model, query_range)
             results.append({
                 'target': target,
                 'target_length':
