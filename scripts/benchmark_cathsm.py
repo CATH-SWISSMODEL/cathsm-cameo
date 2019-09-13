@@ -113,6 +113,9 @@ def get_pdb_info(filename):
     template = None
     sim = None
     sid = None
+    trg_seq = ">trg\n"
+    tpl_seq = ">tpl\n"
+    aln = None
     with open(filename) as fd:
         fd.seek(4800)  # Skip header until around line "REMARK   3 MODEL INFORMATION"
         for line in fd:
@@ -128,12 +131,28 @@ def get_pdb_info(filename):
             elif line.startswith("REMARK   3  SID"):
                 offset = len("REMARK   3  SID")
                 sid = float(line[offset:])
+            elif line.startswith("REMARK   3  ALN A TRG"):
+                offset = len("REMARK   3  ALN A TRG")
+                trg_seq += line[offset:]
+            elif line.startswith("REMARK   3  ALN A TPL"):
+                offset = len("REMARK   3  ALN A TPL")
+                tpl_seq += line[offset:]
+            elif line.startswith("REMARK   3  ALN A OFF"):
+                # This is the template offset.
+                # At this point we are done with the alignment section
+                # so create the alignment too
+                offset = len("REMARK   3  ALN A OFF")
+                tpl_offset = int(line[offset:])
+                aln = ost.io.AlignmentFromString(trg_seq + tpl_seq)
+                aln.SetSequenceOffset(1, tpl_offset)
+
             if sid is not None and sim is not None and qmn4 is not None and \
-                    template is not None:
+                    template is not None and aln is not None:
                 return {"qmean4": qmn4,
                         "template": template,
                         "sim": sim,
-                        "sid": sid
+                        "sid": sid,
+                        "aln": aln,
                         }
     raise ValueError("QMN4 value not found")
 
@@ -375,6 +394,10 @@ def assess_target(target, args, crh):
                 'sm_coverage': lddt_sm['coverage'],
                 'cathsm_coverage': lddt_cathsm['coverage'],
                 'sm_rank': sm_rank,
+                'cathsm_sid': cathsm_info['sid'],
+                'sm_sid': sm_info['sid'],
+                'cathsm_sim': cathsm_info['sim'],
+                'sm_sim': sm_info['sim'],
                 'cathsm_template': cathsm_info['template'],
                 'sm_template': sm_info['template'],
                 'cathsm_qmean4': cathsm_info['qmean4'],
