@@ -113,9 +113,6 @@ def get_pdb_info(filename):
     template = None
     sim = None
     sid = None
-    trg_seq = ">trg\n"
-    tpl_seq = ">tpl\n"
-    aln = None
     with open(filename) as fd:
         fd.seek(4800)  # Skip header until around line "REMARK   3 MODEL INFORMATION"
         for line in fd:
@@ -131,28 +128,13 @@ def get_pdb_info(filename):
             elif line.startswith("REMARK   3  SID"):
                 offset = len("REMARK   3  SID")
                 sid = float(line[offset:])
-            elif line.startswith("REMARK   3  ALN A TRG"):
-                offset = len("REMARK   3  ALN A TRG")
-                trg_seq += line[offset:]
-            elif line.startswith("REMARK   3  ALN A TPL"):
-                offset = len("REMARK   3  ALN A TPL")
-                tpl_seq += line[offset:]
-            elif line.startswith("REMARK   3  ALN A OFF"):
-                # This is the template offset.
-                # At this point we are done with the alignment section
-                # so create the alignment too
-                offset = len("REMARK   3  ALN A OFF")
-                tpl_offset = int(line[offset:])
-                aln = ost.io.AlignmentFromString(trg_seq + tpl_seq)
-                aln.SetSequenceOffset(1, tpl_offset)
 
             if sid is not None and sim is not None and qmn4 is not None and \
-                    template is not None and aln is not None:
+                    template is not None:
                 return {"qmean4": qmn4,
                         "template": template,
                         "sim": sim,
                         "sid": sid,
-                        "aln": aln,
                         }
     raise ValueError("QMN4 value not found")
 
@@ -304,6 +286,8 @@ def compare_structures(model, reference):
                         'oligo_lddt': None,
                         'single_chain_lddt': None,
                         'coverage': None,
+                        'chain_mapping': None,
+                        'best_chain': None,
                         }
             else:
                 ost.LogError("ost compare-structures returned %s, error stream included below " % proc.returncode)
@@ -325,6 +309,8 @@ def compare_structures(model, reference):
                     'oligo_lddt': None,
                     'single_chain_lddt': None,
                     'coverage': None,
+                    'chain_mapping': None,
+                    'best_chain': None,
                     }
 
         # What is the coverage of the model?
@@ -335,18 +321,25 @@ def compare_structures(model, reference):
             assert aln.GetCount() == 2
 
         lddt_results = compare_results['lddt']
-        single_chain_lddts = []
-        for sc_lddt in  lddt_results['single_chain_lddt']:
+        # single_chain_lddts = []
+        best_single_chain_lddt = 0
+        best_chain = None
+        for sc_lddt in lddt_results['single_chain_lddt']:
             assert sc_lddt['status'] == 'SUCCESS'
-            single_chain_lddts.append(sc_lddt['global_score'])
+            # single_chain_lddts.append(sc_lddt['global_score'])
+            if sc_lddt['global_score'] >= best_single_chain_lddt:
+                best_single_chain_lddt = sc_lddt['global_score']
+                best_chain = sc_lddt['model_chain']
 
         assert lddt_results['oligo_lddt']['status'] == 'SUCCESS'
         assert lddt_results['weighted_lddt']['status'] == 'SUCCESS'
 
         return {'weighted_lddt': lddt_results['weighted_lddt']['global_score'],
                 'oligo_lddt': lddt_results['oligo_lddt']['global_score'],
-                'single_chain_lddt': max(single_chain_lddts),
+                'single_chain_lddt': best_single_chain_lddt,
+                'best_chain': best_chain,
                 'coverage': max(coverages),
+                'chain_mapping': compare_results['info']['mapping']['chain_mapping'],
                 }
 
 
@@ -357,6 +350,17 @@ def get_qmeandisco_range(model, query_range):
     return numpy.mean(b_factors)
 
 
+def get_chain_length(model, cname):
+    """ Return the length of chain cname of the model.
+    Based on actual residue numbers, which may differ from SEQRES."""
+    if cname is None:
+        # Happens ie if we didn't have any mapping because SM didn't cover the
+        # domain at all. In this case just grab the first chain
+        cname = model.Select('cname!="_" and cname!="-"').chains[0].name
+    chain = model.FindChain(str(cname))
+    return chain.residues[-1].number.num - chain.residues[0].number.num
+
+
 def assess_target(target, args, crh):
     """ Assess SM and CATH-SM models against a target. """
     results = []
@@ -365,17 +369,22 @@ def assess_target(target, args, crh):
     for rank, hit in enumerate(iter_hits(crh, target), start=1):
         ost.LogScript(hit)
         query_range = get_query_range(crh, target, hit)
-        cathsm_model, cathsm_info = get_cathsm_model(args.models_path, target, hit)
+        cathsm_model, cathsm_info = get_cathsm_model(args.models_path, target,
+                                                     hit)
         target_for_hit = cut_target(target_structure, query_range)
 
         # Compare
         lddt_cathsm = compare_structures(cathsm_model, target_for_hit)
+        cathsm_chain_length = get_chain_length(cathsm_model,
+                                               lddt_cathsm['best_chain'])
 
         for sm_rank, (sm_model, sm_info) in enumerate(
                 iter_sm_models(args.sm_models_path, target),
                 start=1):
             ost.LogScript("SM model %s" % sm_rank)
             lddt_sm = compare_structures(sm_model, target_for_hit)
+            sm_chain_length = get_chain_length(sm_model,
+                                               lddt_sm['best_chain'])
             qmeandisco_sm = get_qmeandisco_range(sm_model, query_range)
             results.append({
                 'target': target,
@@ -393,6 +402,8 @@ def assess_target(target, args, crh):
                 'cathsm_single_chain_lddt': lddt_cathsm['single_chain_lddt'],
                 'sm_coverage': lddt_sm['coverage'],
                 'cathsm_coverage': lddt_cathsm['coverage'],
+                'sm_length': sm_chain_length,
+                'cathsm_length': cathsm_chain_length,
                 'sm_rank': sm_rank,
                 'cathsm_sid': cathsm_info['sid'],
                 'sm_sid': sm_info['sid'],
