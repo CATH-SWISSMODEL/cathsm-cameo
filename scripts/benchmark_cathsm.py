@@ -1,4 +1,4 @@
-#!/usr/bin/env sm
+#!/usr/bin/env ost
 """ This script generates a CSV file with lDDT values. """
 from __future__ import print_function
 import argparse
