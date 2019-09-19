@@ -20,6 +20,12 @@ The normal CAMEO evaluation, which weights lDDT results by coverage,
 would negatively penalize long targets and/or targets with short
 domains.
 
+## DISCLAIMER
+
+This is a preliminary benchmark analysis of beta-release software.
+It is not intended as a rigorous, publication-ready comparison of the
+modeling algorithms and does not reflect the actual performance
+of the CATH and SWISS-MODEL algorithms themselves.
 
 ## CATH-SM model overview
 
